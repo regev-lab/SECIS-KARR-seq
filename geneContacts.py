@@ -246,3 +246,34 @@ generate_contact_maps(contacts_df, 100, "combined_contact_maps.pdf")
 contacts_df.to_csv("combined_gene_contacts.csv")
 #%%
 contacts_df["gene_name"].value_counts().to_csv("combined_contact_counts.csv")
+
+#%%
+def get_file_contact_counts(file):
+    file_path = os.path.join(data_dir, file)
+    dir_name = file.split(".")[0]
+    contact_data_path = os.path.join("geneData", dir_name, "genes_contact_rows.csv")
+    curr_df = pd.read_csv(contact_data_path)
+    return dir_name, curr_df["gene_name"].value_counts()
+
+# Get all value_counts and store them in a dictionary
+data_dict = {}
+data_dir = "data/pairs/GSE166155_RAW"
+for file in os.listdir(data_dir):
+    dir_name, value_counts = get_file_contact_counts(file)
+    data_dict[dir_name] = value_counts
+
+# Create a DataFrame from the dictionary
+summary_df = pd.DataFrame.from_dict(data_dict, orient="index").T
+# Fill missing values with 0
+summary_df = summary_df.fillna(0).astype(int)
+
+# Ensure all gene names are included
+summary_df = summary_df.reindex(gene_names, fill_value=0)
+#%%
+summary_df.head()
+
+#%%
+summary_df.to_csv("gene_contacts_file_summary.csv")
+
+
+
