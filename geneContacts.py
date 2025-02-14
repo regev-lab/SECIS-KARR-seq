@@ -49,6 +49,59 @@ def create_transcript_contact_file(file_path, gene_name, total_lines = None):
                 contact_ct += 1
     return contact_ct
 
+
+#%% Plotting
+from matplotlib.backends.backend_pdf import PdfPages
+
+def generate_contact_maps(df, m=100, pdf_output=None):
+    pdf = PdfPages(pdf_output) if pdf_output else None  # Open a PDF if output is provided
+
+    for gene in gene_names:
+        # Extract positions for the current gene
+        gene_contact_positions = df[df["gene_name"] == gene][["position1", "position2"]].values
+        if len(gene_contact_positions) == 0:
+            continue
+        
+        #gene_length = gene_contact_positions.max()
+        gene_length = gene_lengths[gene]
+        # Initialize contact map
+        contact_map = np.zeros((m, m), dtype=int)
+        
+        # Populate contact map
+        for pos1, pos2 in gene_contact_positions:
+            if 1 <= pos1 <= gene_length and 1 <= pos2 <= gene_length:
+                a = int((pos1-1) * m / gene_length)
+                b = int((pos2-1) * m / gene_length)
+                contact_map[a, b] += 1
+                contact_map[b, a] += 1
+            else:
+                print(f"out of bounds: {gene}, ({pos1}, {pos2}), Length: {gene_length}")
+        
+        #tick_positions = [int(i/m*gene_length) for i in range (m+1)]
+        tick_positions = [int(i/m*gene_length) for i in range(0, m+1, 5)]
+        tick_labels = [str(pos) for pos in tick_positions]
+        tick_locations = [i * (m / gene_length) - 0.5 for i in tick_positions]
+        # Plot the contact map
+        fig, ax = plt.subplots(figsize=(6, 6))
+        im = ax.imshow(contact_map, cmap="hot", origin="lower", interpolation="nearest")
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        ax.set_title(f"Summed Contact Map for {gene} (Count: {len(gene_contact_positions)})")
+        ax.set_xlabel("Binned Position 1 (nt)")
+        ax.set_ylabel("Binned Position 2 (nt)")
+        ax.set_xticks(tick_locations)
+        ax.set_xticklabels(tick_labels, rotation=45, ha="right", rotation_mode="anchor")  
+        ax.set_yticks(tick_locations)
+        ax.set_yticklabels(tick_labels)
+        if pdf:
+            pdf.savefig(fig)  # Save to PDF
+        else:
+            plt.show()  # Show on screen
+
+        plt.close(fig)  # Close figure to free memory
+
+    if pdf:
+        pdf.close()  # Close PDF file
+        
 #%% Optimized version
 def create_transcript_contact_files(file_path, gene_names, dirName, total_lines = None):
     
@@ -69,6 +122,8 @@ def create_transcript_contact_files(file_path, gene_names, dirName, total_lines 
         for line in tqdm(f, total=total_lines, desc=f"Processing: {os.path.basename(file_path)}"):
             fields = line.strip().split()
             read_id, chr1, pos1, chr2, pos2, strand1, strand2 = fields[:7]
+            
+            # Check if transcriptID matches one of the genes in our dictionary
             if chr1 in transcript_ids and chr1 == chr2:
                 gene_contact_lines[transcript_ids[chr1]].append(line)
                 gene_contact_rows.append({
@@ -101,8 +156,11 @@ def create_transcript_contact_files(file_path, gene_names, dirName, total_lines 
         ])
     
     df.to_csv(os.path.join(output_dir, "genes_summary.csv"), index=False)
-        
-    gene_contact_df = pd.DataFrame(gene_contact_rows) 
+    columns = [
+    "read_id", "gene_name", "transcript_id",
+    "position1", "position2", "strand1", "strand2"
+    ]    
+    gene_contact_df = pd.DataFrame(gene_contact_rows, columns=columns)
     gene_contact_df = gene_contact_df.astype({"position1": int, "position2": int})
     
     gene_contact_df.to_csv(os.path.join(output_dir, "genes_contact_rows.csv"), index=False)
@@ -112,50 +170,6 @@ def create_transcript_contact_files(file_path, gene_names, dirName, total_lines 
     
     return gene_contact_counts, gene_contact_df
 
-#%% Plotting
-from matplotlib.backends.backend_pdf import PdfPages
-
-def generate_contact_maps(df, m=30, pdf_output=None):
-    pdf = PdfPages(pdf_output) if pdf_output else None  # Open a PDF if output is provided
-
-    for gene in gene_names:
-        # Extract positions for the current gene
-        gene_contact_positions = df[df["gene_name"] == gene][["position1", "position2"]].values
-        if len(gene_contact_positions) == 0:
-            continue
-        
-        gene_length = gene_contact_positions.max()
-        
-        # Initialize contact map
-        contact_map = np.zeros((m, m), dtype=int)
-        
-        # Populate contact map
-        for pos1, pos2 in gene_contact_positions:
-            if 1 <= pos1 <= gene_length and 1 <= pos2 <= gene_length:
-                a = int((pos1-1) * m / gene_length)
-                b = int((pos2-1) * m / gene_length)
-                contact_map[a, b] += 1
-                contact_map[b, a] += 1
-            else:
-                print(f"out of bounds: {gene}, ({pos1}, {pos2}), Length: {gene_length}")
-
-        # Plot the contact map
-        fig, ax = plt.subplots(figsize=(6, 6))
-        im = ax.imshow(contact_map, cmap="hot", origin="lower", interpolation="nearest")
-        fig.colorbar(im, label="Contact Count")
-        ax.set_title(f"Summed Contact Map for {gene} ({m}x{m})")
-        ax.set_xlabel("Binned Position 1")
-        ax.set_ylabel("Binned Position 2")
-
-        if pdf:
-            pdf.savefig(fig)  # Save to PDF
-        else:
-            plt.show()  # Show on screen
-
-        plt.close(fig)  # Close figure to free memory
-
-    if pdf:
-        pdf.close()  # Close PDF file
 #%%
 #gunzip -c GSM5064767_G1_kethoxal-K562_M15_R01.dedup.pairs.gz | grep NM_206926 | wc
 #find contacts
@@ -183,7 +197,7 @@ file = "GSM5064767_G1_kethoxal-K562_M15_R01.dedup.pairs.gz"
 
 file_path = os.path.join(data_dir,file)
 
-dir_name = "_".join(file.split(".")[0].split("_")[1:])
+dir_name = file.split(".")[0]
 
 
 gene_contact_counts, contact_df1 = create_transcript_contact_files(file_path, gene_names, dir_name)
@@ -193,31 +207,42 @@ data_dir = "data/pairs/GSE166155_RAW"
 file = "GSM5064768_G1_kethoxal-K562_M15_R02.dedup.pairs.gz"
 
 file_path = os.path.join(data_dir,file)
-dir_name = "_".join(file.split(".")[0].split("_")[1:])
+dir_name = file.split(".")[0]
 
 
 gene_contact_counts2, contact_df2 = create_transcript_contact_files(file_path, gene_names, dir_name)
 
-#%%
-dir_name = "_".join(file.split(".")[0].split("_")[1:])
+
+#%% Generate Gene Files and Contact Maps for all Files
+data_dir = "data/pairs/GSE166155_RAW"
+for file in os.listdir(data_dir):
+    file_path = os.path.join(data_dir,file)
+    dir_name = file.split(".")[0]
+    gene_contact_counts, contact_df = create_transcript_contact_files(file_path, gene_names, dir_name)
+#%% Created Combined Contact DF and find contact map
+data_dir = "data/pairs/GSE166155_RAW"
+columns = [
+    "read_id", "gene_name", "transcript_id",
+    "position1", "position2", "strand1", "strand2"
+]   
+
+gene_contact_row_dfs = []
+
+def get_file_contact_rows(file):
+    file_path = os.path.join(data_dir,file)
+    dir_name = file.split(".")[0]
+    contact_data_path = os.path.join("geneData", dir_name, "genes_contact_rows.csv")
+    curr_df = pd.read_csv(contact_data_path)
+    return curr_df
+    
+contacts_df = pd.concat( [get_file_contact_rows(file) for file in os.listdir(data_dir)])
+print(contact_df.head())
+print(contact_df.info())
+
+#%% Generate Export PDF
+generate_contact_maps(contacts_df, 100, "combined_contact_maps.pdf")
 
 #%%
-gene = "TXNRD1"
+contacts_df.to_csv("combined_gene_contacts.csv")
 #%%
-contact_df2.info()
-
-#%%
-(contact_df1["strand1"]+contact_df1["strand2"]).value_counts()
-
-#%%
-contact_df1["gene_name"].value_counts()
-#%%
-contact_df1[(contact_df1["strand1"]+contact_df1["strand2"])=="--"]
-#%%
-
-contact_df1.info()
-#%%
-gene_contact_positions = contact_df1[contact_df1["gene_name"]==gene][["position1", "position2"]]
-#%%
-contact_df_negative = contact_df1[(contact_df1["strand1"]+contact_df1["strand2"])=="--"]
-generate_contact_maps(contact_df_negative,100, "output.pdf")
+contacts_df["gene_name"].value_counts().to_csv("combined_contact_counts.csv")
