@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 
 from scipy.ndimage import zoom
 
-
+import matplotlib
 
 
 #%%
@@ -29,8 +29,20 @@ gene_lengths = df['Length']
 
 #%%
 gene_names = list(gene_transcript_ids.index)
+
 #%%
-gene_names
+secis_df = pd.read_csv("secis_info.csv", index_col = 0)
+
+#%%
+secis_df["transcript_length"] =secis_df.index.map(gene_lengths)
+secis_df["dist_stop"] = secis_df["dist_stop"].str.split(" ").str[0].astype("int64")
+secis_df["secis_end"] = secis_df["transcript_length"] - secis_df["dist_end"]
+secis_df["secis_start"] = secis_df["secis_end"] - secis_df["secis_length"]
+secis_df["stop_codon"] = secis_df["secis_end"] - secis_df["dist_stop"]
+
+secis_df = secis_df[["secis_start", "secis_end", "stop_codon", "transcript_length"]]
+#%%
+secis_df.head()
 
 #%%
 def create_transcript_contact_file(file_path, gene_name, total_lines = None):
@@ -53,7 +65,7 @@ def create_transcript_contact_file(file_path, gene_name, total_lines = None):
 #%% Plotting
 from matplotlib.backends.backend_pdf import PdfPages
 
-def generate_contact_maps(df, m=100, pdf_output=None):
+def generate_contact_maps(df, m=100, pdf_output=None, norm = "linear"):
     pdf = PdfPages(pdf_output) if pdf_output else None  # Open a PDF if output is provided
 
     for gene in gene_names:
@@ -83,15 +95,28 @@ def generate_contact_maps(df, m=100, pdf_output=None):
         tick_locations = [i * (m / gene_length) - 0.5 for i in tick_positions]
         # Plot the contact map
         fig, ax = plt.subplots(figsize=(6, 6))
-        im = ax.imshow(contact_map, cmap="hot", origin="lower", interpolation="nearest")
+        im = ax.imshow(contact_map, cmap="hot", origin="lower", interpolation="nearest", norm = norm)
         cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        ax.set_title(f"Summed Contact Map for {gene} (Count: {len(gene_contact_positions)})")
+        ax.set_title(f"Summed {norm.capitalize()} Contact Map for {gene} (Count: {len(gene_contact_positions)})")
         ax.set_xlabel("Binned Position 1 (nt)")
         ax.set_ylabel("Binned Position 2 (nt)")
         ax.set_xticks(tick_locations)
         ax.set_xticklabels(tick_labels, rotation=45, ha="right", rotation_mode="anchor")  
         ax.set_yticks(tick_locations)
         ax.set_yticklabels(tick_labels)
+            
+        if gene in secis_df.index:
+            for line_label in ["secis_start", "secis_end", "stop_codon"]:
+                line_pos = secis_df[line_label][gene]/gene_length*m
+                # Add vertical line (x-axis)
+                ax.axvline(x=line_pos, color="blue", linestyle="--", linewidth=1)
+                ax.text(line_pos, 0, line_label, ha="center", va="bottom", rotation=90, fontsize=10, color="blue")
+        
+                # Add horizontal line (y-axis)
+                ax.axhline(y=line_pos, color="blue", linestyle="--", linewidth=1)
+                ax.text(0, line_pos, line_label, ha="left", va="center", fontsize=10, color="blue")
+            
+        
         if pdf:
             pdf.savefig(fig)  # Save to PDF
         else:
@@ -112,6 +137,8 @@ def create_transcript_contact_files(file_path, gene_names, dirName, total_lines 
             total_lines = sum(1 for _ in f)
             
         print(f"Total Lines: {total_lines}")
+    else if total_lines == -1:
+        total_lines = None
 
     gene_contact_lines = {gene_name: [] for gene_name in gene_names}
 
@@ -168,6 +195,10 @@ def create_transcript_contact_files(file_path, gene_names, dirName, total_lines 
     gene_contact_df_negative = gene_contact_df[(gene_contact_df["strand1"]+gene_contact_df["strand2"])=="--"]
     generate_contact_maps(gene_contact_df_negative, 100, os.path.join(output_dir, "contact_maps.pdf"))
     
+    norm = "log"
+    generate_contact_maps(gene_contact_df_negative, 100, os.path.join(output_dir, f"{norm}_contact_maps.pdf"), norm = norm)
+
+    
     return gene_contact_counts, gene_contact_df
 
 #%%
@@ -188,8 +219,6 @@ gene_contact_counts = {}
 for gene in gene_names:
     gene_contact_counts[gene] = create_transcript_contact_file(file_path, gene, total_lines)
 '''
-#%%
-contact_df1.info()
 #%%
 data_dir = "data/pairs/GSE166155_RAW"
 
@@ -229,21 +258,46 @@ columns = [
 gene_contact_row_dfs = []
 
 def get_file_contact_rows(file):
-    file_path = os.path.join(data_dir,file)
+    file_path = os.path.join(data_dir, file)
     dir_name = file.split(".")[0]
     contact_data_path = os.path.join("geneData", dir_name, "genes_contact_rows.csv")
     curr_df = pd.read_csv(contact_data_path)
+    curr_df["file"] = dir_name # Adding the file column
     return curr_df
     
 contacts_df = pd.concat( [get_file_contact_rows(file) for file in os.listdir(data_dir)])
-print(contact_df.head())
-print(contact_df.info())
+print(contacts_df.head())
+print(contacts_df.info())
 
-#%% Generate Export PDF
-generate_contact_maps(contacts_df, 100, "combined_contact_maps.pdf")
+#%% Reorder columns and add derived columns
+contacts_df["position1"] = contacts_df["position1"].astype(int)
+contacts_df["position2"] = contacts_df["position2"].astype(int)
+
+contacts_df["strand1"] = contacts_df["strand1"].str == '+'
+contacts_df["strand2"] = contacts_df["strand2"].str == '+'
+
+contacts_df["distance"] = abs(contacts_df["position1"] - contacts_df["position2"])
+
+# Reorder columns to place "file" after "read_id"
+column_order = ["read_id", "file", "gene_name", "transcript_id", 
+                "position1", "position2", "distance", "strand1", "strand2"]
+contacts_df = contacts_df[column_order]
 
 #%%
-contacts_df.to_csv("combined_gene_contacts.csv")
+matplotlib.scale.get_scale_names()
+#%% Generate Overall Contact Map
+norm = "log"
+generate_contact_maps(contacts_df, 100, norm = norm)
+
+#%% Generate Export PDF
+norm = "log"
+generate_contact_maps(contacts_df, 100, pdf_output = f"combined_{norm}_contact_maps.pdf", norm = norm)
+
+#%%
+contacts_df = contacts_df.sort_values(by=["gene_name", "distance"], ascending=[True, False])
+
+contacts_df.to_csv("combined_gene_contacts.csv", index = False)
+
 #%%
 contacts_df["gene_name"].value_counts().to_csv("combined_contact_counts.csv")
 
